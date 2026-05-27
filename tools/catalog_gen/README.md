@@ -1,52 +1,76 @@
-# `tools/catalog_gen/` — placeholder
+# `tools/catalog_gen/`
 
-This directory is the receiving location for `gen_catalog_lean.py` and
-its helpers under Phase 1 of the PgAst extraction.
+Lean-native catalog snapshot generator. Replaces the 631-LOC Python
+generator `gen_catalog_lean.py` (currently Aion-side, scheduled to
+move here on 2026-06-01 per the Phase 1 plan) with a pipeline that
+participates in the same Bazel-native gates as Pg.Ir clusters.
 
-**Currently empty.** Real content arrives via Phase 1 of the extraction
-(Aion-side drives, target start **2026-06-01**), when the script moves
-from `~/Documents/rfcs/tools/catalog_gen/gen_catalog_lean.py` to here.
+## Design
 
-## What `gen_catalog_lean.py` does (per Aion's existing design)
+`.dat` files in `@postgres_src//src/include/catalog/` are the source
+of truth for PG's bootstrap system catalog rows. PG itself parses
+them via `Catalog.pm::ParseData` (which uses Perl `eval` on the input
+— see `reference/Catalog.pm`, vendored here as the grammar reference).
 
-Parses pinned Postgres `.dat` files (the `pg_namespace`, `pg_class`,
-`pg_proc`, `pg_attribute`, `pg_authid`, etc. system-catalog seed data
-shipped with the Postgres source tree) and produces a Lean snapshot at
-`lean/Pg/Catalog/Generated.lean`. The snapshot is structurally the
-same shape every run, so a CI drift gate (currently in Aion as
-`//lean:catalog_generated_drift_gate_test`, moves here per Q3) checks
-that the committed `Generated.lean` matches what the script would
-produce from the pinned source.
+The Lean-native pipeline:
 
-## Why it moves here
+```
+  @postgres_src//src/include/catalog/pg_namespace.dat
+            │
+            ▼  Pg.Catalog.Dat.parse  (Lean module, lean/Pg/Catalog/Dat.lean)
+       File { catname = "pg_namespace", rows = [...] }
+            │
+            ▼  Pg.Catalog.Generated.emit  (TBD Lean script)
+       Generated.lean snapshot for downstream Lean specs
+```
 
-`Pg/Catalog/Generated.lean` is generic Postgres catalog content (not
-Aion-domain). The tooling that produces it travels with the data.
-After the move, Aion drops `tools/catalog_gen/` and depends on the
-rules_postgres-owned generator.
+Validation:
 
-## Postgres source pin
+  - **Round-trip:** `lean_emit` runs a Lean script that parses each
+    committed `.dat` file and re-emits its canonical form;
+    `lean_regen_test` from `@rules_lean//lean:lean.bzl` gates the
+    output against the committed `.dat` snapshot. A passing
+    round-trip proves the Lean grammar captures the upstream format.
+  - **Drift:** `Generated.lean` is built from `.dat` at every Bazel
+    invocation. No committed-artifact drift gate; the snapshot just
+    gets rebuilt. The "committed `Generated.lean`" smell from the
+    Python pipeline is eliminated.
 
-This script consumes `@postgres_src` provided by rules_postgres's
-`pg.source` extension (`postgres/extensions.bzl`). Current pin:
-**Postgres 17.6** (see `MODULE.bazel`: `pg.source(version = "17.6")`).
+## Status (2026-05-27)
 
-Aion's existing pin at
-`~/Documents/rfcs/tools/postgres_src/postgres_src_repositories.bzl`
-is verified for alignment before Phase 1 commits — see the Phase 1
-plan's "Outstanding pre-move verification" section.
+  - [x] Vendored reference grammar: `reference/Catalog.pm` (from PG 17.6)
+  - [x] Vendored sample `.dat`: `lean/Pg/Catalog/dat/pg_namespace.dat`
+  - [x] Lean type scaffold: `lean/Pg/Catalog/Dat.lean` (compiles)
+  - [ ] Parser: `Pg.Catalog.Dat.parse : String → Except String File`
+  - [ ] Emitter: `Pg.Catalog.Dat.emit : File → String`
+  - [ ] Round-trip lean_emit + lean_regen_test wiring
+  - [ ] Extend parser to handle `pg_type.dat`, `pg_authid.dat`,
+        `pg_class.dat`, `pg_proc.dat` (PG-CAT-3d coverage)
+  - [ ] `Pg.Catalog.Generated` rebuild script (lean_emit reading the
+        parsed `.dat` files)
 
-## Decision trail
+## Why this replaces the Python script
 
-`~/Documents/rfcs/narrative/pgast-extraction-*.md` — 5-doc dialogue
-(proposal → review → response → phase1-plan → phase1-ack).
+User direction (2026-05-27): the existing `gen_catalog_lean.py`
+"seems like a code smell" — Python as a third language between PG
+and Lean, with `Generated.lean` committed-and-drift-gated. The
+Lean-native pipeline:
 
-## When Phase 1 lands here
+  - Removes Python from the catalog build.
+  - Removes `Generated.lean` from source control (build artifact).
+  - Pattern-matches the Pg.Ir cluster gates exactly: `lean_emit` +
+    `lean_regen_test` from `@rules_lean//lean:lean.bzl` (v0.3.2).
 
-Expected files (relocated from Aion's `tools/catalog_gen/`):
+## Outstanding cross-repo work
 
-- `gen_catalog_lean.py` — the generator
-- `BUILD.bazel` — `py_binary` target + the drift-gate `sh_test`
-- Helper Python modules (if any)
+The Phase 1 extraction plan (8-doc decision trail under
+`~/Documents/rfcs/narrative/pgast-extraction-*.md`) scheduled the
+Python script's move from Aion to here on 2026-06-01. With the
+Lean-native direction, that move is no longer needed — Aion-side
+`gen_catalog_lean.py` can be retired in favor of consuming the
+rebuilt `Generated.lean` from rules_postgres.
 
-Until then, this README is the only thing in the dir.
+Pre-move verification still useful: confirm the Aion-side
+Postgres source pin (`postgres_src_repositories.bzl`) aligns with
+rules_postgres' `pg.source(version = "17.6")` so the catalog
+snapshot has the same OIDs on both sides during the transition.
