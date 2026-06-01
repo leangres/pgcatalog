@@ -155,11 +155,46 @@ structure PgType where
   typelem       : Oid .type     := Oid.invalid .type
 deriving Repr
 
+/-- `pg_proc.proargmodes` — argument direction / role per
+    declared parameter.
+
+    Postgres encodes these as single chars in the catalog
+    column; we mirror the enum at the Lean level for case
+    safety. When `proargmodes` is empty (the bootstrap default)
+    every argument is treated as `.in`. -/
+inductive ArgMode where
+  | in_       : ArgMode  -- 'i' — input (default)
+  | out       : ArgMode  -- 'o' — output only (composite return)
+  | inout     : ArgMode  -- 'b' — both input AND output
+  | variadic  : ArgMode  -- 'v' — variadic (array-of-…)
+  | tableOut  : ArgMode  -- 't' — RETURNS TABLE(...) column
+deriving DecidableEq, Repr
+
+def ArgMode.toChar : ArgMode → Char
+  | .in_      => 'i'
+  | .out      => 'o'
+  | .inout    => 'b'
+  | .variadic => 'v'
+  | .tableOut => 't'
+
 /-- A row of `pg_proc`. `prosecdef = true` iff the function was
     declared `SECURITY DEFINER` (runs with the privileges of the
     defining role rather than the invoking role) — the centerpiece
     of one of the auth-bug classes catalog grounding aims to make
-    provable. -/
+    provable.
+
+    `proargnames` is the per-argument source name (`pg_proc.proargnames`).
+    Defaults to `[]` for catalogs that don't carry them; consumers
+    that need named args populate the field, otherwise they fall
+    back to positional `arg0`/`arg1`/… naming.
+
+    `proretset = true` for set-returning functions (`SETOF X`,
+    `RETURNS TABLE(...)`). Mirrors the postgres column directly.
+
+    `proargmodes` lines up positionally with `proargtypes` /
+    `proargnames`. Empty means "all IN" (the postgres-default
+    encoding). For `RETURNS TABLE(...)` the table columns appear
+    as trailing `.tableOut` entries. -/
 structure PgProc where
   oid           : Oid .proc
   proname       : String
@@ -170,6 +205,9 @@ structure PgProc where
   prorettype    : Oid .type
   proargtypes   : List (Oid .type) := []
   proowner      : Oid .role := Oid.invalid .role
+  proargnames   : List String  := []
+  proretset     : Bool         := false
+  proargmodes   : List ArgMode := []
 deriving Repr
 
 /-- A row of `pg_attribute`. Attributes have no oid of their own;
