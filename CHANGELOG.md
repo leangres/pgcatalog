@@ -1,5 +1,40 @@
 # Changelog
 
+## 17.6.3 — OID-independent identity (`Pg.Catalog.Canonical`)
+
+⛔ **A differential gate against a real Postgres cannot compare OIDs, and finding
+that out late sinks the harness.** `Pg.Migrate.step` allocates deterministically
+from 16384; a live cluster allocates from a counter shared with every object
+ever created, moved during `initdb`, with gaps. Two catalogs can be identical in
+every way anyone cares about and agree on not one single OID.
+
+`ObjKey` is the identity every claim made against real Postgres has to be stated
+over. Claims internal to the model keep their deterministic OIDs — cheap, total,
+and exactly right for `native_decide`.
+
+**`unresolved` is a KEY, not a `none`.** The tempting signature returns
+`Option ObjKey` for an OID that does not resolve. That fails open in the worst
+way for a differential gate: it compares two key sets, and if misses are
+filtered out then an OID dangling on *both* sides disappears from both and the
+sides **agree by omission** — a dangling `confrelid` reads as a clean diff. So a
+failure to resolve is a value carrying the kind and raw OID. It cannot be
+dropped without someone writing code to drop it.
+
+Flat rather than recursive: a function's argument types are rendered strings.
+A nested inductive would buy nothing (an argument type is always a type) and
+would cost the `DecidableEq` every downstream `native_decide` needs.
+
+Two keying decisions worth knowing: `relkind` is NOT part of a relation's key
+(Postgres already forbids two relations sharing a name in a schema, and
+including kind would make a table→view change read as an unrelated drop plus
+create), and an index keys on its OWN `pg_class` name rather than its table's
+(otherwise every index on a table collapses onto one key and a dropped index
+reads as clean).
+
+Pinned, headline first: the same schema at disjoint OID ranges canonicalizes
+identically — with a companion pin asserting those OIDs really do differ, so the
+first is not vacuous.
+
 ## 17.6.2 — the catalog as a state, not just a view
 
 `Snapshot` answers "what does this schema look like". A migration needs more,
