@@ -1,0 +1,102 @@
+load("@rules_lean//lean:lean.bzl", "lean_library", "lean_main_test", "lean_olean_archive", "lean_test")
+
+# `Pg.Catalog` — a first-principles model of Postgres's system catalog:
+# phantom-typed OIDs, the six kernel tables, name resolution, and PG 17.6's own
+# bootstrap data rendered as Lean.
+#
+# This is its own module rather than part of the AST module because it changes on
+# a different clock. `Generated.lean` alone is 4,686 lines regenerated only when
+# Postgres releases; the AST is edited daily. rules_lean compiles a whole library
+# in ONE action, so sharing a module would mean recompiling the catalog dump on
+# every AST edit.
+#
+# `Dat.lean` + `DatRoundTrip.lean` are in the library because the parser belongs
+# with the model; only the round-trip *gate* needs Postgres source, and that is a
+# test.
+lean_library(
+    name = "pgcatalog",
+    srcs = [
+        "Pg/Catalog.lean",
+        "Pg/Catalog/AttributeRef.lean",
+        "Pg/Catalog/Dat.lean",
+        "Pg/Catalog/Generated.lean",
+        "Pg/Catalog/Oid.lean",
+        "Pg/Catalog/RegTypes.lean",
+        "Pg/Catalog/Resolution.lean",
+        "Pg/Catalog/Snapshot.lean",
+        "Pg/Catalog/SnapshotEmit.lean",
+        "Pg/Catalog/Tables.lean",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# One archive per (lean-version, os, arch) — `.olean` is a compacted heap image,
+# so it is neither Lean-version- nor architecture-portable. Measured on a sibling
+# module, same sources and toolchain: 557,513 bytes on linux against 555,423 on
+# darwin. Publishing has to be per-arch.
+lean_olean_archive(
+    name = "pgcatalog_oleans",
+    library = ":pgcatalog",
+    visibility = ["//visibility:public"],
+)
+
+# Consumes the COMPILED library via `deps` rather than re-listing sources, so CI
+# exercises the seam a downstream module will actually use.
+lean_test(
+    name = "snapshot_emit_test",
+    srcs = ["Pg/Catalog/SnapshotEmitTest.lean"],
+    entry = "Pg/Catalog/SnapshotEmitTest.lean",
+    visibility = ["//visibility:public"],
+    deps = [":pgcatalog"],
+)
+
+# The .dat round-trip gate: parse each of PG 17.6's 24 bootstrap catalog files,
+# canonically re-emit, re-parse, and require stability across all 6,777 rows
+# (pg_proc alone is 3,314). `DatRoundTrip.lean`'s `main : IO UInt32` self-validates
+# and returns 0 only when every file round-trips, so `lean_main_test` needs no
+# committed expected-output fixture.
+#
+# A passing gate certifies the Lean grammar captures every value shape Postgres's
+# own .dat files use — quoted strings with `\\` and `\'` escapes, bare-identifier
+# values, brace-containing strings, multi-line records.
+#
+# The .dat files are read from the pinned `@postgres_src` tree, NOT vendored here.
+# (rules_postgres's own comment claimed vendoring under `Pg/Catalog/dat/`; no such
+# directory exists in either repo. The fetch is the real mechanism.)
+lean_main_test(
+    name = "gate_catalog_dat_round_trip",
+    # A Lean compile plus a run over 6,777 rows exceeds the default 300s budget.
+    timeout = "long",
+    srcs = [
+        "Pg/Catalog/Dat.lean",
+        "Pg/Catalog/DatRoundTrip.lean",
+    ],
+    data = [
+        "@postgres_src//:src/include/catalog/pg_aggregate.dat",
+        "@postgres_src//:src/include/catalog/pg_am.dat",
+        "@postgres_src//:src/include/catalog/pg_amop.dat",
+        "@postgres_src//:src/include/catalog/pg_amproc.dat",
+        "@postgres_src//:src/include/catalog/pg_authid.dat",
+        "@postgres_src//:src/include/catalog/pg_cast.dat",
+        "@postgres_src//:src/include/catalog/pg_class.dat",
+        "@postgres_src//:src/include/catalog/pg_collation.dat",
+        "@postgres_src//:src/include/catalog/pg_conversion.dat",
+        "@postgres_src//:src/include/catalog/pg_database.dat",
+        "@postgres_src//:src/include/catalog/pg_language.dat",
+        "@postgres_src//:src/include/catalog/pg_namespace.dat",
+        "@postgres_src//:src/include/catalog/pg_opclass.dat",
+        "@postgres_src//:src/include/catalog/pg_operator.dat",
+        "@postgres_src//:src/include/catalog/pg_opfamily.dat",
+        "@postgres_src//:src/include/catalog/pg_proc.dat",
+        "@postgres_src//:src/include/catalog/pg_range.dat",
+        "@postgres_src//:src/include/catalog/pg_tablespace.dat",
+        "@postgres_src//:src/include/catalog/pg_ts_config.dat",
+        "@postgres_src//:src/include/catalog/pg_ts_config_map.dat",
+        "@postgres_src//:src/include/catalog/pg_ts_dict.dat",
+        "@postgres_src//:src/include/catalog/pg_ts_parser.dat",
+        "@postgres_src//:src/include/catalog/pg_ts_template.dat",
+        "@postgres_src//:src/include/catalog/pg_type.dat",
+    ],
+    entry = "Pg/Catalog/DatRoundTrip.lean",
+    visibility = ["//visibility:public"],
+)

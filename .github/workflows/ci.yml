@@ -1,0 +1,74 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # The library, the published archive, and a consumer taking the COMPILED
+  # library via `deps`. Linux, because that is where consumers build — and
+  # because `lean_olean_archive` before rules_lean 0.6.1 failed only on linux
+  # (GNU tar exits 1 reading through the bazel-out symlink farm; BSD tar warns),
+  # so a darwin-green archive is not evidence.
+  build:
+    name: lean library + olean archive (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bazel-contrib/setup-bazel@0.10.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+      - run: |
+          bazel test //lean:snapshot_emit_test --test_output=errors
+          bazel build //lean:pgcatalog_oleans
+      - name: the archive must carry real bytes, not links into bazel-out
+        run: |
+          A=$(bazel cquery --output=files //lean:pgcatalog_oleans 2>/dev/null | tail -1)
+          echo "archive: $A ($(wc -c < "$A") bytes)"
+          # A non-dereferenced archive still has entries at the right paths, so
+          # assert entry TYPE. 'l' in column one is a symlink; any is a failure.
+          if tar tvzf "$A" | grep -q '^l'; then
+            echo "FAIL: archive contains symlinks — not dereferenced" >&2
+            tar tvzf "$A" | grep '^l' >&2
+            exit 1
+          fi
+          n=$(tar tzf "$A" | grep -c '\.olean$')
+          test "$n" -eq 10 || { echo "FAIL: $n oleans, expected 10" >&2; exit 1; }
+          echo "OK: $n oleans, no symlinks"
+
+  # The .dat round-trip against Postgres's OWN bootstrap catalog: parse all 24
+  # files, canonically re-emit, re-parse, require stability.
+  #
+  # Its own job because it is slow — ~8.5 minutes locally, dominated by the Lean
+  # compile plus a run over pg_proc's 3,314 rows, before the @postgres_src tarball
+  # fetch. Keeping it out of the fast lane means an edit to the catalog model does
+  # not wait on it.
+  dat_round_trip:
+    name: catalog .dat round-trip vs PG 17.6 (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bazel-contrib/setup-bazel@0.10.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-dat
+          repository-cache: true
+      - run: bazel test //lean:gate_catalog_dat_round_trip --test_output=all
+
+  buildifier:
+    name: buildifier lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install buildifier
+        run: |
+          curl -fsSL -o /usr/local/bin/buildifier \
+            https://github.com/bazelbuild/buildtools/releases/download/v7.3.1/buildifier-linux-amd64
+          chmod +x /usr/local/bin/buildifier
+      - run: buildifier --mode=check --lint=warn -r .
