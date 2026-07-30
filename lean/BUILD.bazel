@@ -18,6 +18,7 @@ lean_library(
     srcs = [
         "Pg/Catalog.lean",
         "Pg/Catalog/AttributeRef.lean",
+        "Pg/Catalog/Canonical.lean",
         "Pg/Catalog/Dat.lean",
         "Pg/Catalog/Generated.lean",
         "Pg/Catalog/Oid.lean",
@@ -49,6 +50,16 @@ lean_test(
     name = "state_test",
     srcs = ["Pg/Catalog/StateTest.lean"],
     entry = "Pg/Catalog/StateTest.lean",
+    visibility = ["//visibility:public"],
+    deps = [":pgcatalog"],
+)
+
+# OID-independent identity: the surface every claim against a REAL Postgres has
+# to be stated over, since `step` and a live cluster agree on no OID at all.
+lean_test(
+    name = "canonical_test",
+    srcs = ["Pg/Catalog/CanonicalTest.lean"],
+    entry = "Pg/Catalog/CanonicalTest.lean",
     visibility = ["//visibility:public"],
     deps = [":pgcatalog"],
 )
