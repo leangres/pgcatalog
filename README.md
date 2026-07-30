@@ -81,13 +81,26 @@ rejects a mismatch loudly rather than misbehaving quietly.
 
 ## Versioning
 
-`<pg_major>.<pg_minor>.<patch>`, with `compatibility_level = 17`.
+`<pg_major>.<pg_minor>.<patch>` — `17.6.1` models Postgres 17.6.
 
-This module genuinely models a Postgres release — `Generated.lean` comes from
-17.6's own bootstrap files, and catalog OIDs move between majors. So bzlmod
-**refuses** to resolve a build that mixes Postgres majors, which is correct: a
-catalog model built from 17's data does not describe 18, and a build that silently
-mixed them would be wrong in ways no test would name.
+This module genuinely models a release: `Generated.lean` comes from 17.6's own
+bootstrap files, and catalog OIDs move between majors.
+
+⚠ **The version is a convention, not an enforced constraint.** 17.6.0 carried
+`compatibility_level = 17` and claimed bzlmod would refuse to resolve a build
+mixing Postgres majors. It would not — Bazel 9 made `compatibility_level` a no-op
+and says so on every build. The attribute is gone; 17.6.0 was never published, so
+nothing depended on the claim.
+
+Concretely: a consumer *can* resolve `pgcatalog 17.6.x` next to a future
+`pgast 18.0.x` and resolution will not complain. The mismatch surfaces as a Lean
+type error if the shapes moved, or not at all if they didn't — a silently wrong
+catalog.
+
+Enforcement is owed, not done. Two candidates: an invariant in the registry's
+admission gate, which already ratchets cross-module properties of exactly this
+shape; or a per-module Lean version constant plus a consumer-side agreement test,
+so a mismatch fails by computation.
 
 ## Not included
 

@@ -3,7 +3,27 @@
 All notable changes to pgcatalog. Version headers mirror the published
 bazel-registry entries.
 
-## 17.6.0 — carved out of rules_postgres
+## 17.6.1 — `compatibility_level` dropped; the versioning claim corrected
+
+17.6.0 was tagged but **never published**, so nothing depended on it.
+
+It carried `compatibility_level = 17` with a comment claiming bzlmod would refuse
+to resolve a build mixing Postgres majors. **It would not.** Bazel 9 made
+`compatibility_level` a no-op and prints so on every build — the attribute bought
+a warning and nothing else, while the comment asserted a guarantee that did not
+exist. Attribute removed and the claim corrected wherever it appeared.
+
+The `<pg_major>.<pg_minor>.<patch>` scheme stands as a **convention**: it makes
+the Postgres coupling visible in every dependency line and gives one coordination
+axis. It is not enforced. A consumer can resolve `pgcatalog 17.6.x` alongside a
+future `pgast 18.0.x` and resolution will not complain; the mismatch surfaces as a
+Lean type error if shapes moved, or silently not at all.
+
+Enforcement is owed. Candidates: an invariant in the registry admission gate,
+which already ratchets cross-module properties of this shape, or a per-module Lean
+version constant plus a consumer-side agreement test.
+
+## 17.6.0 — carved out of rules_postgres (tagged, never published)
 
 `Pg.Catalog.*` extracted from `tomato-bazel/rules_postgres` with
 `git filter-repo`, history preserved (10 commits). 12 files, 6,092 lines, each

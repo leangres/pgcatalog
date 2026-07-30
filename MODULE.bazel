@@ -1,16 +1,33 @@
 module(
     name = "pgcatalog",
-    version = "17.6.0",
-    compatibility_level = 17,
+    version = "17.6.1",
 )
 
 # Version tracks the Postgres release this models, not an independent semver.
 # `Generated.lean` is rendered from PG 17.6's own `src/include/catalog/*.dat`
-# bootstrap files, and catalog OIDs move between majors — so `compatibility_level
-# = 17` makes bzlmod refuse to resolve a build that mixes Postgres majors. That
-# is the intended behaviour: a catalog model built from 17's bootstrap data does
-# not describe 18, and a build that silently mixed them would be wrong in ways no
-# test would name.
+# bootstrap files, so the model only describes 17.6.
+#
+# ⚠ This is a CONVENTION, not an enforced constraint, and 17.6.0 claimed
+# otherwise. That release carried `compatibility_level = 17` with a comment saying
+# bzlmod would refuse to resolve a build mixing Postgres majors. **It would not.**
+# Bazel 9 made `compatibility_level` a no-op — `bazel mod graph` says so outright
+# ("The attribute 'compatibility_level' in module() is a no-op and will be removed
+# in a future Bazel release") — so the attribute bought nothing but a warning on
+# every build, while the comment asserted a guarantee that did not exist.
+# Attribute dropped; 17.6.0 was never published, so nothing depended on the claim.
+#
+# What this means in practice: a consumer CAN resolve `pgcatalog 17.6.x` alongside
+# a hypothetical `pgast 18.0.x` and nothing will complain at resolution. The
+# mismatch would surface as a Lean type error if the shapes moved — or not at all,
+# as a silently wrong catalog.
+#
+# Enforcement is therefore still owed. The two candidates, neither built yet:
+#   * a registry gate invariant — `tomato-bazel/gate` already ratchets exactly this
+#     shape of cross-module property (C1 is "one live version per third-party
+#     atom"); "all pg-versioned leangres modules in a graph agree on major.minor"
+#     is the same kind of claim, checked where the ecosystem already checks;
+#   * a Lean-level constant per pg-versioned module plus a consumer-side agreement
+#     test, so a mismatch fails the build by computation.
 
 bazel_dep(name = "rules_lean", version = "0.6.1")
 
