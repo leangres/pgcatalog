@@ -37,9 +37,18 @@ jobs:
             tar tvzf "$A" | grep '^l' >&2
             exit 1
           fi
+          # Derive the expected count from the library's own srcs rather than
+          # hardcoding it. A literal broke the moment State.lean was added, and
+          # would break again on every legitimate addition — a check that fails
+          # on correct changes trains people to edit the check.
+          want=$(bazel query 'labels(srcs, //lean:pgcatalog)' 2>/dev/null | grep -c '\.lean$')
           n=$(tar tzf "$A" | grep -c '\.olean$')
-          test "$n" -eq 10 || { echo "FAIL: $n oleans, expected 10" >&2; exit 1; }
-          echo "OK: $n oleans, no symlinks"
+          test "$n" -eq "$want" || {
+            echo "FAIL: $n oleans, but //lean:pgcatalog has $want sources" >&2
+            exit 1
+          }
+          test "$n" -gt 0 || { echo "FAIL: empty archive" >&2; exit 1; }
+          echo "OK: $n oleans (one per source), no symlinks"
 
   # The .dat round-trip against Postgres's OWN bootstrap catalog: parse all 24
   # files, canonically re-emit, re-parse, require stability.

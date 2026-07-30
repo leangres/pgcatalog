@@ -1,5 +1,57 @@
 # Changelog
 
+## 17.6.2 — the catalog as a state, not just a view
+
+`Snapshot` answers "what does this schema look like". A migration needs more,
+and `pgast` 17.6.1 made the gap concrete: it can now emit
+`ADD CONSTRAINT ... NOT VALID` and `VALIDATE CONSTRAINT`, and nothing here could
+model the difference.
+
+**Four new tables** — `PgConstraint`, `PgIndex`, `PgDepend`, `PgAttrdef` — plus
+`ConType`, `DepType`, and four new `OidKind`s. Without them there is no
+`DROP … RESTRICT` (nothing to compute a dependent set from), no
+`NOT VALID`/`VALIDATE` (that state lives in `convalidated`), and no foreign-key
+invariant to preserve across a change.
+
+**`CatalogState` carries `Snapshot` unchanged alongside**, rather than extending
+it. Deliberate: `Pg.Migrate.Fold` produces a `Snapshot` under a byte-equivalence
+claim over a 1,384-statement production schema, and `Catalog.Generated`
+constructs 4,686 lines of `Snapshot` literals. Everything reading a `Snapshot`
+keeps working; the transition reads a `CatalogState`.
+
+It seeds identically to `Fold` — `pg_catalog` 11, `public` 2200, OIDs from
+16384 — so a state built either way starts the same, which is what lets the two
+be compared later.
+
+### Three lookups that are preconditions, not conveniences
+
+- `findConstraint` — scoped **by relation**, because constraint names are unique
+  per relation and not per schema.
+- `hasUniqueIndexOn` — the check Postgres performs when a foreign key is created
+  and `Pg.Schema.consistentB` does not: an FK must reference uniquely-indexed
+  columns or it does not identify one row. Order matters; Postgres matches the
+  index's column list, not a set. `indisvalid` is modelled because an index
+  still building, or one whose `CONCURRENTLY` build failed, looks usable in
+  `pg_class` alone and is not.
+- `droppableRestrict` — only `normal` dependencies block. An `auto`/`internal`
+  edge, such as the index Postgres created to back a PRIMARY KEY, goes with the
+  parent either way, so refusing a DROP because of one would be wrong. That is
+  why `deptype` is modelled rather than collapsed to a boolean.
+
+### A named limitation
+
+⚠ **`conbin`, `indpred` and `adbin` are `String`, not expression trees.** This
+module is deliberately dep-free and the expression type lives in `pgast`, which
+depends on *this* one — typing them properly would be a cycle.
+
+That is a real limitation, not something to tidy up in place: a reference walker
+asking "does anything still mention this column?" cannot work off rendered text.
+When that is needed it belongs in `pgmigrate`, which can see both the catalog and
+the AST. Postgres itself keeps both forms, so the split is not unnatural.
+
+11 pins in `Pg/Catalog/StateTest.lean`; 3/3 test targets pass including the
+`.dat` round-trip.
+
 All notable changes to pgcatalog. Version headers mirror the published
 bazel-registry entries.
 

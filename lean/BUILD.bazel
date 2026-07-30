@@ -25,6 +25,7 @@ lean_library(
         "Pg/Catalog/Resolution.lean",
         "Pg/Catalog/Snapshot.lean",
         "Pg/Catalog/SnapshotEmit.lean",
+        "Pg/Catalog/State.lean",
         "Pg/Catalog/Tables.lean",
     ],
     visibility = ["//visibility:public"],
@@ -42,6 +43,16 @@ lean_olean_archive(
 
 # Consumes the COMPILED library via `deps` rather than re-listing sources, so CI
 # exercises the seam a downstream module will actually use.
+# The lookups a migration transition depends on — validated-vs-NOT-VALID,
+# unique-index coverage for FK targets, and RESTRICT's dependent set.
+lean_test(
+    name = "state_test",
+    srcs = ["Pg/Catalog/StateTest.lean"],
+    entry = "Pg/Catalog/StateTest.lean",
+    visibility = ["//visibility:public"],
+    deps = [":pgcatalog"],
+)
+
 lean_test(
     name = "snapshot_emit_test",
     srcs = ["Pg/Catalog/SnapshotEmitTest.lean"],
