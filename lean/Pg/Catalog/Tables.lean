@@ -240,4 +240,117 @@ structure PgAuthid where
   rolbypassrls   : Bool := false
 deriving Repr
 
+/-! ## Constraints, indexes and dependencies
+
+    These four tables are what a *migration* needs and a static schema model
+    does not. Without them there is no `DROP … RESTRICT` (nothing to compute a
+    dependent set from), no `NOT VALID` / `VALIDATE` (that state lives in
+    `convalidated`), and no foreign-key invariant to preserve across a change.
+
+    ⚠ **Expressions are stored rendered, not as trees.** `conbin` and `indpred`
+    are `Option String` rather than a typed expression, because this module is
+    deliberately dep-free and the expression type lives in `pgast`, which
+    depends on *this* module — typing them properly would be a cycle.
+
+    That is a real limitation, not a shortcut to tidy up later in place: a
+    reference walker that asks "does anything still mention this column?" cannot
+    work off a rendered string. When that is needed it belongs in `pgmigrate`,
+    which can see both this model and the AST. Postgres itself keeps both forms
+    (`conbin` as a node tree, historically `consrc` as text), so the split is
+    not unnatural. -/
+
+/-- What a `pg_constraint` row constrains. -/
+inductive ConType where
+  | check      : ConType
+  | foreignKey : ConType
+  | primaryKey : ConType
+  | unique     : ConType
+  | exclusion  : ConType
+deriving DecidableEq, Repr
+
+/-- A row of `pg_constraint`.
+
+    `convalidated` is the field that makes online migrations expressible. A
+    constraint added `NOT VALID` is enforced on new and updated rows immediately
+    but has never been checked against existing ones; `VALIDATE CONSTRAINT`
+    scans and flips this. `pgast` can emit both, so the catalog has to be able
+    to distinguish them — otherwise the model says a table is constrained when
+    only its future rows are. -/
+structure PgConstraint where
+  oid          : Oid .constraint
+  conname      : String
+  connamespace : Oid .namespace
+  contype      : ConType
+  /-- False iff added `NOT VALID` and not yet validated. -/
+  convalidated : Bool := true
+  /-- The constrained relation. -/
+  conrelid     : Oid .relation
+  /-- The index backing a PK/UNIQUE/EXCLUDE constraint, if any. -/
+  conindid     : Option (Oid .relation) := none
+  /-- The referenced relation, for a foreign key. -/
+  confrelid    : Option (Oid .relation) := none
+  /-- Constrained column numbers, as `pg_attribute.attnum`. -/
+  conkey       : List Int := []
+  /-- Referenced column numbers, for a foreign key. -/
+  confkey      : List Int := []
+  /-- The CHECK expression, RENDERED. See the note above on why this is not a
+      tree. -/
+  conbin       : Option String := none
+deriving DecidableEq, Repr
+
+/-- A row of `pg_index`.
+
+    An index is also a `pg_class` row, so both identifiers here are relation
+    OIDs — `indexrelid` is the index itself, `indrelid` the table it covers. -/
+structure PgIndex where
+  indexrelid : Oid .relation
+  indrelid   : Oid .relation
+  indisunique  : Bool := false
+  indisprimary : Bool := false
+  /-- False while a `CREATE INDEX CONCURRENTLY` is still building, or after one
+      has failed — a state that looks like a usable index in `pg_class` alone
+      and is not. -/
+  indisvalid   : Bool := true
+  /-- Indexed column numbers; `0` marks an expression element. -/
+  indkey     : List Int := []
+  /-- Partial-index predicate, RENDERED. -/
+  indpred    : Option String := none
+deriving DecidableEq, Repr
+
+/-- Why one catalog object depends on another. Matches `pg_depend.deptype`.
+
+    The distinction that matters for `DROP`: `normal` dependents block a
+    `RESTRICT` and are removed by a `CASCADE`, whereas `auto` and `internal`
+    ones are implementation detail that goes with the parent either way. -/
+inductive DepType where
+  | normal    : DepType
+  | auto      : DepType
+  | internal  : DepType
+  | extension : DepType
+  | pin       : DepType
+deriving DecidableEq, Repr
+
+/-- A row of `pg_depend`. Deliberately untyped in its object references: a
+    dependency edge can point at any catalog kind, so the phantom-typed `Oid k`
+    cannot express both ends. `classid` names which catalog the `objid` is in. -/
+structure PgDepend where
+  classid      : OidKind
+  objid        : Nat
+  /-- Column number when the dependency is on one column rather than the whole
+      relation; `0` means the object itself. -/
+  objsubid     : Int := 0
+  refclassid   : OidKind
+  refobjid     : Nat
+  refobjsubid  : Int := 0
+  deptype      : DepType
+deriving DecidableEq, Repr
+
+/-- A row of `pg_attrdef` — a column default, RENDERED. Separate from
+    `pg_attribute` exactly as in Postgres. -/
+structure PgAttrdef where
+  adrelid : Oid .relation
+  adnum   : Int
+  adbin   : String
+deriving DecidableEq, Repr
+
 end Pg.Catalog

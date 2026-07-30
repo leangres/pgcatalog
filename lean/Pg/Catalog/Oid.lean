@@ -31,6 +31,10 @@ inductive OidKind where
   | type      : OidKind   -- pg_type.oid
   | proc      : OidKind   -- pg_proc.oid       (functions, procedures, aggregates)
   | role      : OidKind   -- pg_authid.oid     (login roles + group roles)
+  | constraint : OidKind  -- pg_constraint.oid (CHECK / FK / PK / UNIQUE / EXCLUDE)
+  | policy    : OidKind   -- pg_policy.oid     (row-level security policies)
+  | trigger   : OidKind   -- pg_trigger.oid
+  | extension : OidKind   -- pg_extension.oid
 deriving DecidableEq, Repr
 
 /-- Kind-indexed object identifier. The phantom `k : OidKind`
