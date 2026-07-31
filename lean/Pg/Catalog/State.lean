@@ -96,9 +96,77 @@ def dependentsOf (s : CatalogState) (kind : OidKind) (objid : Nat)
   s.depends.filter fun d =>
     d.refclassid == kind && d.refobjid == objid && d.deptype == .normal
 
-/-- Can this object be dropped with `RESTRICT`? -/
+/-- Can this object be dropped with `RESTRICT`?
+
+    Direct dependents only, which is correct: `RESTRICT` refuses if anything
+    depends on the object, and it does not need to know how far the damage would
+    spread. `CASCADE` is the one that needs the closure below. -/
 def droppableRestrict (s : CatalogState) (kind : OidKind) (objid : Nat) : Bool :=
   (s.dependentsOf kind objid).isEmpty
+
+/-! ## The CASCADE closure
+
+    `DROP … CASCADE` drops the object AND everything that depends on it,
+    transitively. Computing only the direct dependents is the bug that makes a
+    cascade leave a view behind pointing at a table that no longer exists.
+
+    ⚠ FUEL-BOUNDED, and not as a shortcut. `pg_depend` is a general graph — real
+    Postgres has cycles in it (a table and its composite type reference each
+    other) — so there is no structural recursion for Lean to accept and a
+    well-founded measure would need a proof that the frontier strictly shrinks,
+    which is exactly what a cycle breaks. Fuel is the honest encoding.
+
+    The bound is `s.depends.length`: each round either adds at least one new
+    object to the closure or stops, and no round can add more objects than there
+    are edges. So the fuel can only be exhausted on a state whose closure is
+    larger than its edge count, which is impossible — but if the invariant ever
+    broke, this TRUNCATES rather than loops. `cascadeClosureComplete` below is
+    how a caller checks it did not. -/
+
+/-- Append preserving order, skipping anything already present. Written out
+    because this is Lean core only — no batteries, so no `eraseDups`. Order is
+    kept stable so the closure reads as a breadth-first discovery, which is what
+    an error message wants to show. -/
+private def pushNew (acc : List (OidKind × Nat)) (x : OidKind × Nat)
+    : List (OidKind × Nat) :=
+  if acc.contains x then acc else acc ++ [x]
+
+/-- One round: everything directly depending on anything already in `acc`. -/
+private def dependentsStep (s : CatalogState) (acc : List (OidKind × Nat))
+    : List (OidKind × Nat) :=
+  let grown := acc.flatMap fun (k, o) =>
+    (s.dependentsOf k o).map (fun d => (d.classid, d.objid))
+  grown.foldl pushNew acc
+
+private def cascadeFix (s : CatalogState) : Nat → List (OidKind × Nat) → List (OidKind × Nat)
+  | 0,       acc => acc
+  | fuel+1,  acc =>
+      let acc' := dependentsStep s acc
+      if acc'.length == acc.length then acc else cascadeFix s fuel acc'
+
+/-- Every object a `DROP … CASCADE` of this one would take with it, INCLUDING
+    the object itself — because that is the list the caller turns into drop
+    effects, and omitting the root is the kind of off-by-one that shows up as a
+    table surviving its own DROP. -/
+def cascadeClosure (s : CatalogState) (kind : OidKind) (objid : Nat)
+    : List (OidKind × Nat) :=
+  cascadeFix s (s.depends.length + 1) [(kind, objid)]
+
+/-- Did the closure actually reach a fixpoint, or did it run out of fuel?
+
+    A caller that cannot tolerate a truncated answer checks this. It is separate
+    from `cascadeClosure` rather than folded into an `Option` for the same reason
+    `Canonical` makes `unresolved` a value: a `none` here would be filtered by
+    someone, and a silently-short cascade is worse than a loud one. -/
+def cascadeClosureComplete (s : CatalogState) (kind : OidKind) (objid : Nat) : Bool :=
+  let c := cascadeClosure s kind objid
+  (dependentsStep s c).length == c.length
+
+/-- The closure minus the root — what `RESTRICT` would have refused over, and
+    what a hazard classifier reports as collateral. -/
+def cascadeCollateral (s : CatalogState) (kind : OidKind) (objid : Nat)
+    : List (OidKind × Nat) :=
+  (s.cascadeClosure kind objid).filter (fun p => !(p.1 == kind && p.2 == objid))
 
 end CatalogState
 
