@@ -1,6 +1,6 @@
 module(
     name = "pgcatalog",
-    version = "17.6.3",
+    version = "17.6.4",
 )
 
 # Version tracks the Postgres release this models, not an independent semver.

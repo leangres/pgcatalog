@@ -114,4 +114,78 @@ example : withAutoDep.droppableRestrict .relation 16400 = true := by native_deci
 /-- Nothing depends on an unrelated object. -/
 example : withNormalDep.droppableRestrict .relation 99999 = true := by native_decide
 
+
+/-! ## The CASCADE closure
+
+    `DROP … CASCADE` drops the object and everything depending on it,
+    TRANSITIVELY. Direct dependents alone is the bug that leaves a view behind
+    pointing at a table that no longer exists. -/
+
+/-- table 16400 ← view 16401 ← view 16402. Dropping the table must take both. -/
+private def chain : CatalogState :=
+  { CatalogState.empty with
+    depends := [
+      { classid := .relation, objid := 16401
+      , refclassid := .relation, refobjid := 16400, deptype := .normal }
+    , { classid := .relation, objid := 16402
+      , refclassid := .relation, refobjid := 16401, deptype := .normal } ] }
+
+example : chain.cascadeClosure .relation 16400
+    = [(.relation, 16400), (.relation, 16401), (.relation, 16402)] := by native_decide
+
+/-- The root is INCLUDED — it is the list the caller turns into drop effects,
+    and omitting it shows up as a table surviving its own DROP. -/
+example : (chain.cascadeClosure .relation 16400).contains (.relation, 16400) = true := by
+  native_decide
+
+/-- Collateral is the closure minus the root: what RESTRICT refuses over. -/
+example : chain.cascadeCollateral .relation 16400
+    = [(.relation, 16401), (.relation, 16402)] := by native_decide
+
+/-- Transitive, not just direct — this is the pin that fails if someone
+    "simplifies" the fixpoint back to one round. -/
+example : (chain.cascadeCollateral .relation 16400).length
+    = (chain.dependentsOf .relation 16400).length + 1 := by native_decide
+
+/-- Dropping the MIDDLE takes only what is below it, not the table above. -/
+example : chain.cascadeClosure .relation 16401
+    = [(.relation, 16401), (.relation, 16402)] := by native_decide
+
+/-- A leaf closes over itself alone. -/
+example : chain.cascadeClosure .relation 16402 = [(.relation, 16402)] := by native_decide
+
+/-! ### A CYCLE terminates, which is the whole reason for the fuel bound.
+
+    Real `pg_depend` has cycles — a table and its composite type reference each
+    other — so there is no structural recursion here and a well-founded measure
+    would need the frontier to strictly shrink, which a cycle breaks. -/
+
+private def cyclic : CatalogState :=
+  { CatalogState.empty with
+    depends := [
+      { classid := .relation, objid := 16501
+      , refclassid := .relation, refobjid := 16500, deptype := .normal }
+    , { classid := .relation, objid := 16500
+      , refclassid := .relation, refobjid := 16501, deptype := .normal } ] }
+
+example : cyclic.cascadeClosure .relation 16500
+    = [(.relation, 16500), (.relation, 16501)] := by native_decide
+
+/-- And it reached a real fixpoint rather than running out of fuel. Checked
+    separately for the same reason `Canonical` makes `unresolved` a value: a
+    silently-short cascade is worse than a loud one. -/
+example : cyclic.cascadeClosureComplete .relation 16500 = true := by native_decide
+
+example : chain.cascadeClosureComplete .relation 16400 = true := by native_decide
+
+/-- `auto`/`internal` edges do NOT participate: they belong to their owner and
+    are dropped with it, so counting them would double-report. -/
+private def autoDep : CatalogState :=
+  { CatalogState.empty with
+    depends := [
+      { classid := .relation, objid := 16601
+      , refclassid := .relation, refobjid := 16600, deptype := .auto } ] }
+
+example : autoDep.cascadeClosure .relation 16600 = [(.relation, 16600)] := by native_decide
+
 end Pg.Catalog.StateTest

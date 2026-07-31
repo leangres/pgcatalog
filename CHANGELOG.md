@@ -1,5 +1,34 @@
 # Changelog
 
+## 17.6.4 — the CASCADE closure
+
+`droppableRestrict` answered RESTRICT correctly, but nothing computed what
+`DROP … CASCADE` would actually take with it. Direct dependents alone is the bug
+that leaves a view behind pointing at a table that no longer exists.
+
+`cascadeClosure` is the transitive set, **including the root** — that is the list
+a caller turns into drop effects, and omitting it shows up as a table surviving
+its own DROP. `cascadeCollateral` is the closure minus the root: what RESTRICT
+refuses over, and what a hazard classifier reports.
+
+⚠ **Fuel-bounded, and not as a shortcut.** `pg_depend` is a general graph and
+real Postgres has cycles in it — a table and its composite type reference each
+other — so there is no structural recursion for Lean to accept, and a
+well-founded measure would need the frontier to strictly shrink, which is exactly
+what a cycle breaks. The bound is `depends.length + 1`: each round adds at least
+one object or stops, and no round can add more objects than there are edges.
+
+`cascadeClosureComplete` reports whether a real fixpoint was reached rather than
+folding it into an `Option` — same reasoning as `Canonical`'s `unresolved`: a
+`none` gets filtered by somebody, and a silently-short cascade is worse than a
+loud one.
+
+`auto`/`internal` edges do not participate. They belong to their owner and are
+dropped with it, so counting them would double-report.
+
+Pinned: a 3-deep chain, dropping from the middle, a leaf, and **a cycle**, which
+is the case the fuel bound exists for.
+
 ## 17.6.3 — OID-independent identity (`Pg.Catalog.Canonical`)
 
 ⛔ **A differential gate against a real Postgres cannot compare OIDs, and finding
